@@ -11,23 +11,28 @@ class SensorStatus(Node):
 
     def __init__(self):
         super().__init__('sensor_status')
+        self.declare_parameter('sensors', ['XELA', 'AFT200'])
         self.declare_parameter('startup_timeout', 10.0)
         self.declare_parameter('data_timeout', 3.0)
+
+        sensors = list(self.get_parameter('sensors').value)
 
         self.startup_timeout = float(
             self.get_parameter('startup_timeout').value
         )
         self.data_timeout = float(self.get_parameter('data_timeout').value)
         self.started_at = time.monotonic()
-        self.last_data = {'XELA': None, 'AFT200': None}
-        self.state = {'XELA': 'starting', 'AFT200': 'starting'}
+        self.last_data = {sensor: None for sensor in sensors}
+        self.state = {sensor: 'starting' for sensor in sensors}
 
-        self.create_subscription(
-            SensStream, '/xServTopic', self._on_xela_data, 10
-        )
-        self.create_subscription(
-            WrenchStamped, '/aidin/wrench_raw', self._on_aft200_data, 10
-        )
+        if 'XELA' in sensors:
+            self.create_subscription(
+                SensStream, '/xServTopic', self._on_xela_data, 10
+            )
+        if 'AFT200' in sensors:
+            self.create_subscription(
+                WrenchStamped, '/aidin/wrench_raw', self._on_aft200_data, 10
+            )
         self.create_timer(0.5, self._check_status)
 
     def _on_xela_data(self, message):
