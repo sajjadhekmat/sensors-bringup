@@ -1,0 +1,14 @@
+[Unit]
+Description=SocketCAN (slcan) can0 on /dev/%I
+# Stop automatically when the USB adapter is unplugged.
+BindsTo=dev-%i.device
+After=dev-%i.device
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/slcand -o -F -s8 -t hw -S 3000000 /dev/%I can0
+# Wait for slcand to create can0, then bring it up.
+ExecStartPost=/bin/sh -c 'for i in $(seq 50); do [ -e /sys/class/net/can0 ] && break; sleep 0.1; done; /usr/sbin/ip link set can0 up'
+ExecStopPost=-/usr/sbin/ip link set can0 down
+Restart=on-failure
+RestartSec=1
