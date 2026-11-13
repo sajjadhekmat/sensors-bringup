@@ -24,6 +24,7 @@ class SensorStatus(Node):
         self.started_at = time.monotonic()
         self.last_data = {sensor: None for sensor in sensors}
         self.state = {sensor: 'starting' for sensor in sensors}
+        self.xela_zero_warned = False
 
         if 'XELA' in sensors:
             self.create_subscription(
@@ -36,8 +37,23 @@ class SensorStatus(Node):
         self.create_timer(0.5, self._check_status)
 
     def _on_xela_data(self, message):
-        if any(sensor.model != 'not_available' for sensor in message.sensors):
+        # xela_server keeps publishing all-zero taxels when nothing arrives
+        # on the CAN bus, so only non-zero readings count as real data.
+        has_data = any(
+            taxel.x or taxel.y or taxel.z
+            for sensor in message.sensors
+            if sensor.model != 'not_available'
+            for taxel in sensor.taxels
+        )
+        if has_data:
             self._mark_up('XELA')
+        elif not self.xela_zero_warned:
+            self.xela_zero_warned = True
+            self.get_logger().warning(
+                'XELA: messages arrive but all taxels are 0 '
+                '(no sensor data on can0; check sensor power and cabling, '
+                'and run: candump can0)'
+            )
 
     def _on_aft200_data(self, _message):
         self._mark_up('AFT200')
@@ -80,9 +96,15 @@ def main(args=None):
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
+    except Exception:
+        # Errors raised while ROS is shutting down (Ctrl+C) are not real
+        # failures; anything else is re-raised.
+        if rclpy.ok():
+            raise
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

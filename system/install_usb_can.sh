@@ -16,5 +16,6 @@ udevadm control --reload-rules
 # Apply to the adapter if it is already plugged in.
 udevadm trigger --action=add --subsystem-match=tty
 
-sleep 2
+# The service waits 2 s for the adapter before starting slcand.
+sleep 4
 ip -br link show can0 || echo "can0 not up yet (is the adapter plugged in?)"
