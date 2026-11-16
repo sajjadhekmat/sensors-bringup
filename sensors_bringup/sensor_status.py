@@ -51,8 +51,9 @@ class SensorStatus(Node):
             self.xela_zero_warned = True
             self.get_logger().warning(
                 'XELA: messages arrive but all taxels are 0 '
-                '(no sensor data on can0; check sensor power and cabling, '
-                'and run: candump can0)'
+                '(no sensor data on can0; try: '
+                'sudo systemctl restart "slcan@*", '
+                'then check sensor power and cabling)'
             )
 
     def _on_aft200_data(self, _message):

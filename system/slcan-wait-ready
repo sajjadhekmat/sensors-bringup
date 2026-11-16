@@ -1,0 +1,131 @@
+#!/usr/bin/python3
+"""Wait until an slcan adapter answers before slcand configures it.
+
+Usage: slcan-wait-ready /dev/ttyUSBx
+
+Right after plug-in the adapter silently drops commands, so slcand's
+"open channel" can get lost, leaving can0 UP but without frames. This sends
+"C" (close channel) and "V" (version) until a version reply arrives.
+
+The first CAN session after plug-in can also stall after a few frames, so a
+trial session is then run (open at 1 Mbit/s, check frames keep arriving,
+close) before slcand takes over. Always exits 0 so slcand starts even if the
+adapter never answers or the sensors send nothing (e.g. unpowered).
+"""
+import os
+import select
+import sys
+import termios
+import time
+
+ATTEMPTS = 20
+REPLY_TIMEOUT = 0.5
+TRIALS = 4
+TRIAL_SECONDS = 1.5
+
+
+def configure(fd):
+    attrs = termios.tcgetattr(fd)
+    iflag, oflag, cflag, lflag, _, _, cc = attrs
+    iflag = 0
+    oflag = 0
+    lflag = 0
+    cflag = termios.CS8 | termios.CREAD | termios.CLOCAL | termios.CRTSCTS
+    cc[termios.VMIN] = 0
+    cc[termios.VTIME] = 0
+    speed = getattr(termios, 'B3000000')
+    termios.tcsetattr(fd, termios.TCSANOW,
+                      [iflag, oflag, cflag, lflag, speed, speed, cc])
+
+
+def read_for(fd, seconds, stop=None):
+    data = b''
+    end = time.monotonic() + seconds
+    while (left := end - time.monotonic()) > 0:
+        ready, _, _ = select.select([fd], [], [], left)
+        if not ready:
+            break
+        chunk = os.read(fd, 256)
+        if not chunk:
+            time.sleep(0.01)
+            continue
+        data += chunk
+        if stop and stop(data):
+            break
+    return data
+
+
+def has_version(data):
+    return any(line.startswith(b'V') and len(line) > 1
+               for line in data.replace(b'\a', b'').split(b'\r')[:-1])
+
+
+def count_frames(data):
+    return sum(1 for line in data.split(b'\r') if line[:1] in (b't', b'T'))
+
+
+def trial_session(fd):
+    """Open the CAN channel briefly; True if frames arrive until the end."""
+    os.write(fd, b'S8\r')
+    read_for(fd, 0.1)
+    os.write(fd, b'O\r')
+    first = read_for(fd, TRIAL_SECONDS - 0.5)
+    last = read_for(fd, 0.5)
+    os.write(fd, b'C\r')
+    read_for(fd, 0.2)
+    total = count_frames(first + last)
+    return count_frames(last) > 0, total
+
+
+def warm_up(fd, dev):
+    for trial in range(1, TRIALS + 1):
+        ok, total = trial_session(fd)
+        if ok:
+            print(f'Trial CAN session {trial} on {dev}: {total} frames, '
+                  'still streaming')
+            return
+        print(f'Trial CAN session {trial} on {dev}: {total} frames, '
+              'stalled or silent', file=sys.stderr)
+        time.sleep(0.5)
+    print(f'No steady CAN traffic on {dev} (sensors powered?); '
+          'starting slcand anyway', file=sys.stderr)
+
+
+def main():
+    # Keep journal lines in order (stdout is a pipe under systemd).
+    sys.stdout.reconfigure(line_buffering=True)
+    dev = sys.argv[1]
+    last = b''
+    for attempt in range(1, ATTEMPTS + 1):
+        try:
+            fd = os.open(dev, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+        except OSError as e:
+            last = str(e).encode()
+            time.sleep(0.5)
+            continue
+        try:
+            configure(fd)
+            termios.tcflush(fd, termios.TCIOFLUSH)
+            os.write(fd, b'C\r')
+            read_for(fd, 0.2)  # discard the "C" reply and stray frames
+            os.write(fd, b'V\r')
+            last = read_for(fd, REPLY_TIMEOUT, has_version)
+            if has_version(last):
+                version = [ln for ln in last.split(b'\r')
+                           if ln.startswith(b'V')][0].decode(errors='replace')
+                warm_up(fd, dev)
+                print(f'Adapter on {dev} ready after {attempt} '
+                      f'attempt(s): {version}')
+                return
+        except OSError as e:
+            last = str(e).encode()
+            print(f'Attempt {attempt} on {dev}: {e}', file=sys.stderr)
+        finally:
+            os.close(fd)
+        time.sleep(0.5)
+    print(f'Adapter on {dev} did not answer (last: {last[:40]!r}); '
+          'starting slcand anyway', file=sys.stderr)
+
+
+if __name__ == '__main__':
+    main()

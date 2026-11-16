@@ -128,7 +128,8 @@ systemctl status 'slcan@*'       # should show active (running)
 |------------------------------|-----------------------------------------|-------------------------------------------------------------------------|
 | `system/99-usb-can.rules`    | `/etc/udev/rules.d/`                    | Identifies the adapter by its USB serial number (not its port) and starts the service on plug-in |
 | `system/slcan@.service`      | `/etc/systemd/system/`                  | Runs `slcand -o -s8 -t hw -S 3000000` (1 Mbit/s CAN) to create `can0` and brings it up; stops on unplug |
-| `system/install_usb_can.sh`  | —                                       | Copies both files and reloads udev/systemd                              |
+| `system/slcan-wait-ready`    | `/usr/local/sbin/`                      | Run by the service before `slcand`: waits until the adapter answers, so the "open channel" command is not lost after plug-in |
+| `system/install_usb_can.sh`  | —                                       | Copies the files and reloads udev/systemd                               |
 
 > **Using a different adapter?** Edit `ID_SERIAL_SHORT` in `system/99-usb-can.rules`
 > (find it with `udevadm info -q property -n /dev/ttyUSB0 | grep ID_SERIAL_SHORT`) and re-run the install script.
@@ -142,6 +143,7 @@ systemctl status 'slcan@*'       # should show active (running)
 | `can0 is missing` / `can0 is down` at launch | Plug in the USB-CAN adapter; check `systemctl status 'slcan@*'` |
 | `slcand` logs `write: Input/output error` | The adapter is stuck from a previous manual `slcand` run. Unplug and replug it |
 | Old failed `slcan@ttyUSBx` entries in `systemctl status` | Harmless leftovers from a previous port; clear with `sudo systemctl reset-failed` |
+| `can0` is UP but `candump can0` shows nothing / `XELA: messages arrive but all taxels are 0` | The adapter missed the "open channel" command. Restart it: `sudo systemctl restart 'slcan@*'`. If that does not help, check sensor power and CAN cabling |
 | `XELA: DOWN` | Check the CAN adapter and sensor power; see the XELA log in `~/.ros/log/` |
 | `AFT200: DOWN` | Check the Ethernet connection to the sensor (default `192.168.1.99:8890`) |
 | Duplicate nodes / topics | Another launch is still running; stop it with Ctrl+C first |
@@ -159,6 +161,7 @@ sensors_bringup/
 ├── system/
 │   ├── 99-usb-can.rules         # udev rule for the USB-CAN adapter
 │   ├── slcan@.service           # systemd service that creates can0
+│   ├── slcan-wait-ready         # waits for the adapter before slcand starts
 │   └── install_usb_can.sh       # one-time installer
 ├── package.xml
 └── setup.py
